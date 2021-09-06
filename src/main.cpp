@@ -1,928 +1,392 @@
-#include "Keyboard.h"
-#include <Mouse.h> //there are some mouse move functions for encoder_Mode 2 and 3
-#include <Keypad.h>
+#include <Arduino.h>
 
-const byte ROWS = 3; //four rows
-const byte COLS = 4; //four columns
+// Include for the LED's
+#include <Adafruit_NeoPixel.h>
 
-#include <Encoder.h>
-Encoder RotaryEncoderA(14, 15); //the LEFT encoder (encoder A)
-Encoder RotaryEncoderB(10, 16); //the RIGHT encoder (encoder B)
+#define PIN A2
+#define NUMPIXELS 13
 
-#include <LiquidCrystal_I2C.h>
-LiquidCrystal_I2C lcd(0x3F, 16, 2); // set the LCD address for a 40 chars and 4 line display
-// Your LCD hardware address or type might be different... This LCD library might not work for your application
-
-const int LCD_NB_ROWS = 2; //for the 4x20 LCD lcd.begin(), but i think this is kinda redundant
-const int LCD_NB_COLUMNS = 16;
-unsigned long previousMillis = 0; // values to compare last time interval was checked (For LCD refreshing)
-int check_State = 0;              // state to check trigger the demo interrupt
-int updateLCD_flag = 0;           // LCD updater, this flag is used to only update the screen once between mode changes
-                                  // and once every 3 second while in a mode. Saves cycles / resources
-
-#include <Adafruit_NeoPixel.h> //inclusion of Adafruit's NeoPixel (RBG addressable LED) library
-#ifdef __AVR__
-#include <avr/power.h>
-#endif
-
-#define PIN A2       // Which pin on the Arduino is connected to the NeoPixels?
-#define NUMPIXELS 13 // How many NeoPixels are attached to the Arduino? 13 total, but they are address from 0,1,2,...12.
+#define GENERAL 150, 150, 150
+#define PURPLE 150, 0, 150
+#define GOLD 168, 67, 0
+#define ORANGE 168, 47, 0
+#define BLUE 0, 92, 168
+#define GREEN 0, 168, 0
+#define RED 168, 0, 0
 
 Adafruit_NeoPixel pixels = Adafruit_NeoPixel(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800);
-int colorUpdate = 0; //setting a flag to only update colors once when the mode is switched.
-const int b = 3;     // Brightness control variable. Used to divide the RBG vales set for the RGB LEDs. full range is 0-255. 255 is super bright
-                     // In fact 255 is obnoxiously bright, so this use this variable to reduce the value. It also reduces the current draw on the USB
+int colorUpdate = 0; // Flag for updating colors
+
+// Include the necessary keyboard stuff
+#include <Keyboard.h>
+#include <Keypad.h>
+
+// Simplifying key names
+#define CTRL KEY_LEFT_CTRL
+#define ALT KEY_LEFT_ALT
+#define SHIFT KEY_LEFT_SHIFT
+#define WIN KEY_LEFT_GUI
+
+// Include stuff for display
+#include <U8g2lib.h>
+
+// Setup OLED
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* clock=*/ SCL, /* data=*/ SDA, /* reset=*/ U8X8_PIN_NONE);
+
+// Scroll Text setup
+int x, x2, minX;
+
+// Mode Button Variables
+int modePushCounter = 0;
+int buttonState = 0;
+int lastButtonState = 0;
+
+// Keyboard Mapping and initialization
+const int ModeButton = 16;
+
+const byte ROWS = 3;
+const byte COLS = 4;
 
 char keys[ROWS][COLS] = {
-    {'1', '2', '3', '4'}, //  the keyboard hardware is  a 3x4 grid...
-    {'5', '6', '7', '8'},
-    {'9', '0', 'A', 'B'}, // these values need  to be single char, so...
+    {'0', '1', '2', '3'},
+    {'4', '5', '6', '7'},
+    {'8', '9', 'A', 'B'},
 };
-// The library will return the character inside this array when the appropriate
-// button is pressed then look for that case statement. This is the key assignment lookup table.
-// Layout(key/button order) looks like this
-//     |----------------------------|
-//     |                  [2/3]*    |     *TRS breakout connection. Keys 5 and 6 are duplicated at the TRS jack
-//     |      [ 1] [ 2] [ 3] [ 4]   |     * Encoder A location = key[1]
-//     |      [ 5] [ 6] [ 7] [ 8]   |     * Encoder B location = Key[4]
-//     |      [ 9] [10] [11] [12]   |      NOTE: The mode button is not row/column key, it's directly wired to A0!!
-//     |----------------------------|
 
-// Variables that will change:
-int modePushCounter = 0; // counter for the number of button presses
-int buttonState = 0;     // current state of the button
-int lastButtonState = 0; // previous state of the button
-int mouseMove;
-
-long positionEncoderA = -999; //encoderA LEFT position variable
-long positionEncoderB = -999; //encoderB RIGHT position variable
-
-const int ModeButton = A0; // the pin that the Modebutton is attached to
-const int pot = A1;        // pot for adjusting attract mode demoTime or mouseMouse pixel value
-//const int Mode1= A2;
-//const int Mode2= A3; //Mode status LEDs
-
-byte rowPins[ROWS] = {4, 5, A3};   //connect to the row pinouts of the keypad
-byte colPins[COLS] = {6, 7, 8, 9}; //connect to the column pinouts of the keypad
+byte rowPins[ROWS] = {4, 5, A3};
+byte colPins[COLS] = {6, 7, 8, 9};
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
+
+// Function Declarations
+void checkModeButton();
+void writeToDisplay(char *toWrite, int size);
+void setPixelMode();
+void setAllPixels(int r, int g, int b);
+void setPixelColor(int pixel, int r, int g, int b);
+void updateDisplay(char const *mode[], int mode_id, int selected);
 
 void setup()
 {
-  lcd.init();      //initialize the 4x20 lcd
-  lcd.backlight(); //turn on the backlight
-  lcd.begin(LCD_NB_COLUMNS, LCD_NB_ROWS);
-  pinMode(ModeButton, INPUT_PULLUP); // initialize the button pin as a input:
-  Serial.begin(9600);                // initialize serial communication:
-
-  lcd.setCursor(0, 0);
-  lcd.print("Macro KB RC V2.0");
-  lcd.setCursor(0, 1);
-  lcd.print("(c) 2020 Ryan Bates");
-  delay(800);
-  lcd.clear();
-
-  Serial.begin(9600);
+  u8g2.begin();
+  pinMode(ModeButton, INPUT_PULLUP);
   Keyboard.begin();
-  pixels.begin(); // This initializes the NeoPixel library.
+
+  // Turn off the TX LED.
+  pinMode(LED_BUILTIN_TX, INPUT);
+  pixels.begin();
 }
+char const *modes[3] = {"VScode", "Discord", "Windows"};
 
-//---------------------Sub Routine Section--------------------------------------------------------------------------
-void setColorsMode0()
+char const *modes0[12] = {"New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal"};
+char const *modes1[12] = {"New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal"};
+char const *modes2[12] = {"New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal"};
+
+void loop()
 {
-  if (colorUpdate == 0)
-  { // have the neopixels been updated?
-    for (int i = 0; i < NUMPIXELS; i++)
-    {                                                   //  Red,Green,Blue                      // pixels.Color takes RGB values; range is (0,0,0) to (255,255,255)
-      pixels.setPixelColor(i, pixels.Color(150, 0, 0)); // Moderately bright red color.
-      pixels.show();                                    // This pushes the updated pixel color to the hardware.
-      delay(50);
-    } // Delay for a period of time (in milliseconds).
-
-    colorUpdate = 1;
-  } // Mark the color flag so neopixels are no longer updated in the loop
-}
-
-void setColorsMode1()
-{
-  if (colorUpdate == 0)
-  {                                                    // have the neopixels been updated?
-    pixels.setPixelColor(0, pixels.Color(80, 0, 200)); //gradient mix
-    pixels.setPixelColor(1, pixels.Color(10, 0, 200)); //gradient mix
-    pixels.setPixelColor(2, pixels.Color(20, 0, 200));
-    pixels.setPixelColor(3, pixels.Color(40, 0, 200));
-    pixels.setPixelColor(4, pixels.Color(60, 0, 200));
-    pixels.setPixelColor(5, pixels.Color(80, 0, 200));
-    pixels.setPixelColor(6, pixels.Color(100, 0, 200));
-    pixels.setPixelColor(7, pixels.Color(120, 0, 200));
-    pixels.setPixelColor(8, pixels.Color(140, 0, 200));
-    pixels.setPixelColor(9, pixels.Color(160, 0, 200));
-    pixels.setPixelColor(10, pixels.Color(180, 0, 200));
-    pixels.setPixelColor(11, pixels.Color(200, 0, 200));
-    pixels.setPixelColor(12, pixels.Color(220, 0, 200));
-    pixels.show();
-    colorUpdate = 1;
-  } // neoPixels have been updated.
-    // Set the flag to 1; so they are not updated until a Mode change
-}
-
-void setColorsMode2()
-{
-  if (colorUpdate == 0)
-  { // have the neopixels been updated?
-    pixels.setPixelColor(0, pixels.Color(51, 102, 0));
-    pixels.setPixelColor(1, pixels.Color(0, 0, 150));
-    pixels.setPixelColor(2, pixels.Color(0, 150, 0));
-    pixels.setPixelColor(3, pixels.Color(150, 0, 0));
-    pixels.setPixelColor(4, pixels.Color(220, 0, 200));
-    pixels.setPixelColor(5, pixels.Color(150, 0, 150));
-    pixels.setPixelColor(6, pixels.Color(150, 0, 150));
-    pixels.setPixelColor(7, pixels.Color(80, 102, 0));
-    pixels.setPixelColor(8, pixels.Color(80, 102, 0));
-    pixels.setPixelColor(9, pixels.Color(5, 5, 100));
-    pixels.setPixelColor(10, pixels.Color(5, 5, 100));
-    pixels.setPixelColor(11, pixels.Color(102, 5, 0));
-    pixels.setPixelColor(12, pixels.Color(80, 102, 0));
-    pixels.show();
-    colorUpdate = 1;
-  } // neoPixels have been updated.
-    // Set the flag to 1; so they are not updated until a Mode change
-}
-
-void setColorsMode3()
-{
-  if (colorUpdate == 0)
-  {                                                      // have the neopixels been updated?
-    pixels.setPixelColor(0, pixels.Color(0, 150, 150));  // cyan
-    pixels.setPixelColor(1, pixels.Color(0, 150, 0));    // green
-    pixels.setPixelColor(2, pixels.Color(0, 150, 150));  // cyan
-    pixels.setPixelColor(3, pixels.Color(0, 150, 0));    // green
-    pixels.setPixelColor(4, pixels.Color(0, 150, 150));  // cyan
-    pixels.setPixelColor(5, pixels.Color(0, 150, 150));  // cyan
-    pixels.setPixelColor(6, pixels.Color(0, 150, 0));    // green
-    pixels.setPixelColor(7, pixels.Color(0, 150, 150));  // cyan
-    pixels.setPixelColor(8, pixels.Color(0, 150, 0));    // green
-    pixels.setPixelColor(9, pixels.Color(0, 150, 0));    // green
-    pixels.setPixelColor(10, pixels.Color(0, 150, 150)); // cyan
-    pixels.setPixelColor(11, pixels.Color(0, 150, 0));   // green
-    pixels.setPixelColor(12, pixels.Color(0, 150, 150)); // cyan
-    pixels.show();
-    colorUpdate = 1;
-  } // neoPixels have been updated.
-    // Set the flag to 1; so they are not updated until a Mode change
+  char key = keypad.getKey();
+  int number = (key < '9') ? key - '0' : key - '7';
+  checkModeButton();
+  setPixelMode();
+  updateDisplay(modes0,modePushCounter, number);
+  switch (modePushCounter)
+  {
+  case 0:
+    if (key != NO_KEY)
+    {
+      switch (number)
+      {
+      case 0:
+        // Discord Mute Microphone
+        Keyboard.press(CTRL);
+        Keyboard.press(ALT);
+        Keyboard.print('1');
+        break;
+      case 1:
+        // Discord Mute Microphone
+        Keyboard.press(CTRL);
+        Keyboard.press(ALT);
+        Keyboard.print('1');
+        break;
+      case 2:
+        // Discord Deafen
+        Keyboard.press(CTRL);
+        Keyboard.press(ALT);
+        Keyboard.print('2');
+        break;
+      case 3:
+        // Discord Screen Share
+        Keyboard.press(CTRL);
+        Keyboard.press(ALT);
+        Keyboard.print('3');
+        break;
+      case 4:
+        // Open/Switch to Discord
+        Keyboard.press(WIN);
+        Keyboard.print('3');
+        break;
+      case 5:
+        // Open Spotify
+        Keyboard.press(WIN);
+        Keyboard.print('5');
+        break;
+      case 6:
+        // Open VSCode
+        Keyboard.press(WIN);
+        Keyboard.print('6');
+        modePushCounter = 2;
+        colorUpdate = 0;
+        break;
+      case 7:
+        //
+        break;
+      case 8:
+        //
+        break;
+      case 9:
+        //
+        break;
+      case 10:
+        //
+        break;
+      case 11:
+        // Focus/Unfocus Desktop
+        Keyboard.press(WIN);
+        Keyboard.print('d');
+        break;
+      }
+    }
+    Keyboard.releaseAll();
+    break;
+  case 1:
+    if (key != NO_KEY)
+    {
+      switch (number)
+      {
+      case 0:
+        Keyboard.press(CTRL);
+        Keyboard.press(SHIFT);
+        Keyboard.print('0');
+        break;
+      case 1:
+        Keyboard.press(CTRL);
+        Keyboard.press(SHIFT);
+        Keyboard.print('1');
+        break;
+      case 2:
+        Keyboard.press(CTRL);
+        Keyboard.press(SHIFT);
+        Keyboard.print('2');
+        break;
+      case 3:
+        Keyboard.press(CTRL);
+        Keyboard.press(SHIFT);
+        Keyboard.print('3');
+        break;
+      case 4:
+        Keyboard.press(CTRL);
+        Keyboard.press(SHIFT);
+        Keyboard.print('4');
+        break;
+      case 5:
+        Keyboard.press(CTRL);
+        Keyboard.press(SHIFT);
+        Keyboard.print('5');
+        break;
+      case 6:
+        Keyboard.press(CTRL);
+        Keyboard.press(SHIFT);
+        Keyboard.print('6');
+        break;
+      case 7:
+        Keyboard.press(CTRL);
+        Keyboard.press(SHIFT);
+        Keyboard.print('7');
+        break;
+      case 8:
+        Keyboard.press(CTRL);
+        Keyboard.press(SHIFT);
+        Keyboard.print('8');
+        break;
+      case 9:
+        Keyboard.press(CTRL);
+        Keyboard.press(SHIFT);
+        Keyboard.print('8');
+        break;
+      case 10:
+        Keyboard.press(CTRL);
+        Keyboard.press(SHIFT);
+        Keyboard.print('-');
+        break;
+      case 11:
+        Keyboard.press(CTRL);
+        Keyboard.press(SHIFT);
+        Keyboard.print('=');
+        break;
+      }
+    }
+    colorUpdate = 0;
+    Keyboard.releaseAll();
+    break;
+  case 2:
+    if (key != NO_KEY)
+    {
+      switch (number)
+      {
+      case 0:
+        // Go to ending of line
+        Keyboard.press(KEY_END);
+        break;
+      case 1:
+        // Open Command Panel
+        Keyboard.press(CTRL);
+        Keyboard.press(SHIFT);
+        Keyboard.print('p');
+        break;
+      case 2:
+        // Open Terminal
+        Keyboard.press(CTRL);
+        Keyboard.print('`');
+        break;
+      case 3:
+        // Toggle Comment line
+        Keyboard.press(CTRL);
+        Keyboard.print('/');
+        break;
+      case 4:
+        // Toggle Comment Block
+        Keyboard.press(SHIFT);
+        Keyboard.press(ALT);
+        Keyboard.print('a');
+        break;
+      case 5:
+        // Split editor Vertical
+        Keyboard.press(CTRL);
+        Keyboard.print('\\');
+        break;
+      case 6:
+        // Split editor Orthogonal
+        Keyboard.press(CTRL);
+        Keyboard.print('k');
+        Keyboard.print('\\');
+        break;
+      case 7:
+        // Fold all regions
+        Keyboard.press(CTRL);
+        Keyboard.print('k');
+        Keyboard.print('0');
+        break;
+      case 8:
+        // Unfold all regions
+        Keyboard.press(CTRL);
+        Keyboard.print('k');
+        Keyboard.print('j');
+        break;
+      case 9:
+        // Go to beginning of line
+        Keyboard.press(KEY_HOME);
+        break;
+      case 10:
+        // Go to beginning of file
+        Keyboard.press(CTRL);
+        Keyboard.press(KEY_HOME);
+        break;
+      case 11:
+        // Go to ending of file
+        Keyboard.press(CTRL);
+        Keyboard.press(KEY_END);
+        break;
+      }
+    }
+    Keyboard.releaseAll();
+    break;
+  }
 }
 
 void checkModeButton()
 {
   buttonState = digitalRead(ModeButton);
   if (buttonState != lastButtonState)
-  { // compare the buttonState to its previous state
+  {
     if (buttonState == LOW)
-    { // if the state has changed, increment the counter
-      // if the current state is LOW then the button cycled:
+    {
       modePushCounter++;
-      Serial.println("pressed");
-      Serial.print("number of button pushes: ");
-      Serial.println(modePushCounter);
-      colorUpdate = 0; // set the color change flag ONLY when we know the mode button has been pressed.
-                       // Saves processor resources from updating the neoPixel colors all the time
+      colorUpdate = 0;
     }
-    delay(50); // Delay a little bit to avoid bouncing
   }
-  lastButtonState = buttonState; // save the current state as the last state, for next time through the loop
-  if (modePushCounter > 3)
-  { //reset the counter after 4 presses CHANGE THIS FOR MORE MODES
+  lastButtonState = buttonState;
+  if (modePushCounter > 2)
+  {
     modePushCounter = 0;
   }
 }
 
-void encoderA()
+void setPixelMode()
 {
-  long newPos = RotaryEncoderA.read() / 4; //When the encoder lands on a valley, this is an increment of 4.
-
-  if (newPos != positionEncoderA && newPos > positionEncoderA)
+  if (colorUpdate == 0)
   {
-    positionEncoderA = newPos;
-    //Serial.println(positionEncoderA);
-    Keyboard.press(KEY_LEFT_ARROW);
-    Keyboard.release(KEY_LEFT_ARROW);
-  }
-
-  if (newPos != positionEncoderA && newPos < positionEncoderA)
-  {
-    positionEncoderA = newPos;
-    //Serial.println(positionEncoderA);
-    Keyboard.press(KEY_RIGHT_ARROW);
-    Keyboard.release(KEY_RIGHT_ARROW);
-  }
-}
-
-void encoderB()
-{
-  long newPos = RotaryEncoderB.read() / 4; //When the encoder lands on a valley, this is an increment of 4.
-  if (newPos != positionEncoderB && newPos > positionEncoderB)
-  {
-    positionEncoderB = newPos;
-    //Serial.println(positionEncoderB);
-    Keyboard.press(KEY_UP_ARROW);
-    Keyboard.release(KEY_UP_ARROW);
-  }
-
-  if (newPos != positionEncoderB && newPos < positionEncoderB)
-  {
-    positionEncoderB = newPos;
-    //Serial.println(positionEncoderB);
-    Keyboard.press(KEY_DOWN_ARROW);
-    Keyboard.release(KEY_DOWN_ARROW);
-  }
-}
-
-//=============== encoder definitions/assignments ===========================================
-//this section allows a unique encoder function for each mode (profile). Four total in this case or modes 0 through 3.
-
-//=============Encoder A & B Function ====== Set 0 =========================================================
-void encoderA_Mode0()
-{
-  long newPos = RotaryEncoderA.read() / 4; //When the encoder lands on a valley, this is an increment of 4.
-                                           // your encoder might be different (divide by 2) i dunno.
-  if (newPos != positionEncoderA && newPos > positionEncoderA)
-  {
-    positionEncoderA = newPos;
-    Keyboard.press(KEY_RIGHT_ARROW);
-    Keyboard.release(KEY_RIGHT_ARROW);
-  }
-
-  if (newPos != positionEncoderA && newPos < positionEncoderA)
-  {
-    positionEncoderA = newPos;
-    Keyboard.press(KEY_LEFT_ARROW);
-    Keyboard.release(KEY_LEFT_ARROW);
-  }
-}
-
-void encoderB_Mode0()
-{
-  long newPos = RotaryEncoderB.read() / 4;
-  if (newPos != positionEncoderB && newPos > positionEncoderB)
-  {
-    positionEncoderB = newPos;
-    Keyboard.press(KEY_DOWN_ARROW);
-    Keyboard.release(KEY_DOWN_ARROW);
-  }
-
-  if (newPos != positionEncoderB && newPos < positionEncoderB)
-  {
-    positionEncoderB = newPos;
-
-    Keyboard.press(KEY_UP_ARROW);
-    Keyboard.release(KEY_UP_ARROW);
-  }
-}
-//=============Encoder A & B Function ====== Set 1 =========================================================
-void encoderA_Mode1()
-{
-  long newPos = RotaryEncoderA.read() / 2;
-  if (newPos != positionEncoderA && newPos < positionEncoderA)
-  {
-    positionEncoderA = newPos;
-    //tab increase
-    Keyboard.write(9); //tab key
-  }
-
-  if (newPos != positionEncoderA && newPos > positionEncoderA)
-  {
-    positionEncoderA = newPos;
-    //tab decrease
-    Keyboard.press(KEY_LEFT_SHIFT);
-    Keyboard.write(9); //tab key
-    Keyboard.release(KEY_LEFT_SHIFT);
-  }
-}
-
-void encoderB_Mode1()
-{
-  long newPos = RotaryEncoderB.read() / 2;
-  if (newPos != positionEncoderB && newPos < positionEncoderB)
-  {
-    positionEncoderB = newPos;
-    //Font decrease | Arduino IDE
-    Keyboard.press(KEY_LEFT_CTRL);
-    Keyboard.press('-');
-    Keyboard.release('-');
-    Keyboard.release(KEY_LEFT_CTRL);
-  }
-
-  if (newPos != positionEncoderB && newPos > positionEncoderB)
-  {
-    positionEncoderB = newPos;
-    //Font increase | Arduino IDE
-    Keyboard.press(KEY_LEFT_CTRL);
-    Keyboard.press('=');
-    Keyboard.release('=');
-    Keyboard.release(KEY_LEFT_CTRL);
-  }
-}
-
-//=============Encoder A & B Function ====== Set 2 =========================================================
-void encoderA_Mode2()
-{ //testing some encoder wheel pay control for arcade games; centede, tempest...
-
-  long newPos = RotaryEncoderA.read() / 2;
-  if (newPos != positionEncoderA && newPos > positionEncoderA)
-  {
-    positionEncoderA = newPos;
-    //Serial.println(mouseMove);
-    Mouse.move(-mouseMove, 0, 0); //moves mouse right... Mouse.move(x, y, wheel) range is -128 to +127
-  }
-
-  if (newPos != positionEncoderA && newPos < positionEncoderA)
-  {
-    positionEncoderA = newPos;
-    Mouse.move(mouseMove, 0, 0); //moves mouse left... Mouse.move(x, y, wheel) range is -128 to +127
-  }
-}
-
-void encoderB_Mode2()
-{
-  long newPos = RotaryEncoderB.read() / 2; //When the encoder lands on a valley, this is an increment of 2.
-  if (newPos != positionEncoderB && newPos < positionEncoderB)
-  {
-    positionEncoderB = newPos;
-    Mouse.move(0, -mouseMove, 0);
-  }
-
-  if (newPos != positionEncoderB && newPos > positionEncoderB)
-  {
-    positionEncoderB = newPos;
-    Mouse.move(0, mouseMove, 0);
-  }
-}
-
-//=============Encoder A & B Function ====== Set 3 =========================================================
-void encoderA_Mode3()
-{
-  long newPos = RotaryEncoderA.read() / 2;
-  if (newPos != positionEncoderA && newPos > positionEncoderA)
-  {
-    positionEncoderA = newPos;
-    Mouse.press(MOUSE_LEFT);   //holds down the mouse left click
-    Mouse.move(0, 4, 0);       //moves mouse down... Mouse.move(x, y, wheel) range is -128 to +127
-    Mouse.release(MOUSE_LEFT); //releases mouse left click
-  }
-
-  if (newPos != positionEncoderA && newPos < positionEncoderA)
-  {
-    positionEncoderA = newPos;
-    Mouse.press(MOUSE_LEFT);   //holds down the mouse left click
-    Mouse.move(0, -4, 0);      //moves mouse up... Mouse.move(x, y, wheel) range is -128 to +127
-    Mouse.release(MOUSE_LEFT); //releases mouse left click
-  }
-}
-
-void encoderB_Mode3()
-{
-  long newPos = RotaryEncoderB.read() / 2;
-  if (newPos != positionEncoderB && newPos > positionEncoderB)
-  {
-    positionEncoderB = newPos;
-    Mouse.press(MOUSE_LEFT);   //holds down the mouse left click
-    Mouse.move(-4, 0, 0);      //moves mouse left... Mouse.move(x, y, wheel) range is -128 to +127
-    Mouse.release(MOUSE_LEFT); //releases mouse left click
-  }
-
-  if (newPos != positionEncoderB && newPos < positionEncoderB)
-  {
-    positionEncoderB = newPos;
-    Mouse.press(MOUSE_LEFT);   //holds down the mouse left click
-    Mouse.move(4, 0, 0);       //moves mouse right... Mouse.move(x, y, wheel) range is -128 to +127
-    Mouse.release(MOUSE_LEFT); //releases mouse left click
-  }
-}
-
-void LCD_update_0()
-{ //This method is less heavy on tying up the arduino cycles to update the LCD; instead
-  //this updates the LCD every 3 seconds. If you put the LCD.write commands
-  //in the key function loops, this breaks the 'feel' and responsiveness of the keys.
-  //This subroutine that runs infrequently helps the keypad function with decent response.
-
-  unsigned long currentMillis = millis();
-
-  //================= a note about this cycle, this follows the example sketch "Blink without Delay"===============
-  if (currentMillis - previousMillis >= 3000)
-  {                                 // if the elasped time greater than 3 seconds
-    previousMillis = currentMillis; // save the last time you checked the interval
-    switch (updateLCD_flag)
+    switch (modePushCounter)
     {
     case 0:
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print("1: END ZOOM CALL");
-      lcd.setCursor(0, 1);
-      lcd.print("2: END ZOOM CALL");
-      lcd.setCursor(0, 2);
-      lcd.print("3: END ZOOM CALL");
-      lcd.setCursor(0, 3);
-      lcd.print("4: END ZOOM CALL");
-      updateLCD_flag = 1;
+      setAllPixels(GENERAL);
+      pixels.show();
       break;
     case 1:
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print("5: END ZOOM CALL");
-      lcd.setCursor(0, 1);
-      lcd.print("6: END ZOOM CALL");
-      lcd.setCursor(0, 2);
-      lcd.print("7: END ZOOM CALL");
-      lcd.setCursor(0, 3);
-      lcd.print("8: END ZOOM CALL");
-      updateLCD_flag = 2;
+      setAllPixels(GOLD);
+      pixels.show();
       break;
     case 2:
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print(" 9: END ZOOM CALL");
-      lcd.setCursor(0, 1);
-      lcd.print("10: END ZOOM CALL");
-      lcd.setCursor(0, 2);
-      lcd.print("11: END ZOOM CALL");
-      lcd.setCursor(0, 3);
-      lcd.print("12: END ZOOM CALL");
-      updateLCD_flag = 0;
+      setAllPixels(BLUE);
+      pixels.show();
       break;
     }
+    colorUpdate = 1;
   }
 }
 
-void LCD_update_1()
+void setAllPixels(int r, int g, int b)
 {
-  unsigned long currentMillis = millis();
-  if (currentMillis - previousMillis >= 3000)
-  {                                 // if the elasped time greater than 3 seconds
-    previousMillis = currentMillis; // save the last time you checked the interval
-    switch (updateLCD_flag)
-    {
-    case 0:
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print("1: nice shot");
-      lcd.setCursor(0, 1);
-      lcd.print("2: great pass");
-      lcd.setCursor(0, 2);
-      lcd.print("3: great save");
-      lcd.setCursor(0, 3);
-      lcd.print("4: thanks");
-      updateLCD_flag = 1;
-      break;
-    case 1:
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print("5: i got it");
-      lcd.setCursor(0, 1);
-      lcd.print("6: take the shot");
-      lcd.setCursor(0, 2);
-      lcd.print("7: defending");
-      lcd.setCursor(0, 3);
-      lcd.print("8: go for it");
-      updateLCD_flag = 2;
-      break;
-    case 2:
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print(" 9: oh no!");
-      lcd.setCursor(0, 1);
-      lcd.print("10: no problem");
-      lcd.setCursor(0, 2);
-      lcd.print("11: whoops");
-      lcd.setCursor(0, 3);
-      lcd.print("12: #@!%*");
-      updateLCD_flag = 0;
-      break;
-    }
+  for (int i = 0; i < 14; i++)
+  {
+    setPixelColor(i, r, g, b);
   }
 }
 
-void LCD_update_2()
+void setPixelColor(int pixel, int r, int g, int b)
 {
-  unsigned long currentMillis = millis();
-  if (currentMillis - previousMillis >= 3000)
-  {                                 //if the elasped time greater than 3 seconds
-    previousMillis = currentMillis; // save the last time you checked the interval
-    switch (updateLCD_flag)
-    {
-    case 0:
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print("1: New & Improved!");
-      lcd.setCursor(0, 1);
-      lcd.print("2: Arduino ProMicro");
-      lcd.setCursor(0, 2);
-      lcd.print("3: Macro Keyboard");
-      lcd.setCursor(0, 3);
-      lcd.print("4: --Version 2.0--");
-      updateLCD_flag = 1;
-      break;
-    case 1:
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print("5: Undo");
-      lcd.setCursor(0, 1);
-      lcd.print("6: Redo");
-      lcd.setCursor(0, 2);
-      lcd.print("7: Find Previous");
-      lcd.setCursor(0, 3);
-      lcd.print("8: Find Next");
-      updateLCD_flag = 2;
-      break;
-    case 2:
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print(" 9: Copy");
-      lcd.setCursor(0, 1);
-      lcd.print("10: Paste");
-      lcd.setCursor(0, 2);
-      lcd.print("11: Comment/ UnComm");
-      lcd.setCursor(0, 3);
-      lcd.print("12: Find");
-      updateLCD_flag = 0;
-      break;
-    }
-  }
+  pixels.setPixelColor(pixel, pixels.Color(r, g, b));
 }
 
-void LCD_update_3()
+int y = 135;
+int offset = 139;
+
+void updateDisplay(char const *mode[], int mode_id, int selected)
 {
-  unsigned long currentMillis = millis();
-  if (currentMillis - previousMillis >= 3000)
-  { //if the elasped time greater than 3 seconds
-    previousMillis = currentMillis;
-    switch (updateLCD_flag)
+  u8g2.firstPage();
+  do {
+    u8g2.clearBuffer();
+    u8g2.setFont(u8g2_font_t0_11_tr);
+    u8g2.setDrawColor(1);
+    u8g2.drawBox(0, 0, 16, u8g2.getDisplayHeight() - 1);
+    u8g2.setFontDirection(3);
+    u8g2.setDrawColor(0);
+    u8g2.drawStr(11, 62, modes[mode_id]);
+    u8g2.setFontDirection(0);
+
+    u8g2.setFont(u8g2_font_t0_11_tr);
+    u8g2.setDrawColor(1);
+    for (int i = 0; i < 12; i++)
     {
-    case 0:
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print("1: MS Paint & Mouse L/R");
-      lcd.setCursor(0, 1);
-      lcd.print("2: window snap <-");
-      lcd.setCursor(0, 2);
-      lcd.print("3: window snap ->");
-      lcd.setCursor(0, 3);
-      lcd.print("4: Alt+F4");
-      updateLCD_flag = 1;
-      break;
-    case 1:
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print("5: Calculator");
-      lcd.setCursor(0, 1);
-      lcd.print("6: Excel");
-      lcd.setCursor(0, 2);
-      lcd.print("7: Word");
-      lcd.setCursor(0, 3);
-      lcd.print("8: Random Wiki");
-      updateLCD_flag = 2;
-      break;
-    case 2:
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print(" 9: lolz");
-      lcd.setCursor(0, 1);
-      lcd.print("10: Ryan's Youtube");
-      lcd.setCursor(0, 2);
-      lcd.print("11: Minimize all");
-      lcd.setCursor(0, 3);
-      lcd.print("12: Snip-it");
-      updateLCD_flag = 0;
-      break;
+      u8g2.drawStr(19, offset - ((y + 11 * (11 - i) + 7) % offset), mode[i]);
     }
-  }
-}
 
-void endZoomCall()
-{ // QUITS YOUR ZOOM CALL FULL STOP.
-  Keyboard.press(KEY_LEFT_ALT);
-  Keyboard.print('q');
-  delay(350);
-  Keyboard.release(KEY_LEFT_ALT);
-  delay(50);
-  Keyboard.write(9); //tab key in ASCII decimal
-  delay(350);
-  Keyboard.press(KEY_RETURN);
-}
-
-void loop()
-{
-  char key = keypad.getKey();
-  mouseMove = (analogRead(pot));               //reading the analog input, pot = pin A1
-  mouseMove = map(mouseMove, 0, 1023, 1, 124); //remap the analog pot values fron 1 to 124
-  checkModeButton();
-
-  switch (modePushCounter)
-  {                   // switch between keyboard configurations:
-  case 0:             //Application Alpha or MODE 0. Example = Every button ends your Zoom call
-    encoderA_Mode0(); //custom function for encoder A
-    encoderB_Mode0(); //custom function for encoder A
-    LCD_update_0();   //Mode 0 text for LCD
-    setColorsMode0(); //indicate what mode is loaded by changing the key colors
-
-    if (key)
+    if (selected >= 0 && selected < 12)
     {
-      Serial.println(key);
-      switch (key)
-      {
-      case '1':
-        endZoomCall();
-        break;
-      case '2':
-        endZoomCall();
-        break;
-      case '3':
-        endZoomCall();
-        break;
-      case '4':
-        endZoomCall();
-        break;
-      case '5':
-        endZoomCall();
-        break;
-      case '6':
-        endZoomCall();
-        break;
-      case '7':
-        endZoomCall();
-        break;
-      case '8':
-        endZoomCall();
-        break;
-      case '9':
-        endZoomCall();
-        break;
-      case '0':
-        endZoomCall();
-        break;
-      case 'A':
-        endZoomCall();
-        break;
-      case 'B':
-        endZoomCall();
-        break;
-      }
-      delay(100);
-      Keyboard.releaseAll(); // this releases the buttons
+      u8g2.setFont(u8g2_font_t0_11_tr);
+      u8g2.setDrawColor(1);
+      u8g2.drawBox(19, 0, 144, 12);
+      u8g2.setDrawColor(0);
+      u8g2.drawStr(24, 11, mode[selected]);
     }
-    break;
-
-  case 1:             //  Application Beta or MODE 1 Rocket League Quick Chat (with light reactive keys)
-    encoderA_Mode2(); //move mouse
-    encoderB_Mode2(); //Beta key4move mouse
-    setColorsMode1();
-    LCD_update_1(); //Mode 1 text for LCD
-    if (key)
-    {
-      //Serial.println(key);
-      switch (key)
-      {
-      case '1':
-        Keyboard.println("nice shot");
-        pixels.setPixelColor(1, pixels.Color(0, 150, 0)); // change the color to green when pressed, wait 100ms so the change can be observed
-        break;
-      case '2':
-        Keyboard.println("great pass");
-        pixels.setPixelColor(2, pixels.Color(0, 150, 0));
-        break;
-
-      case '3':
-        Keyboard.println("great save");
-        pixels.setPixelColor(3, pixels.Color(0, 150, 0));
-        break;
-
-      case '4':
-        Keyboard.println("thanks");
-        pixels.setPixelColor(4, pixels.Color(0, 150, 0));
-        break;
-
-      case '5':
-        Keyboard.println("i got it");
-        pixels.setPixelColor(5, pixels.Color(0, 150, 0));
-        break;
-
-      case '6':
-        Keyboard.println("take the shot");
-        pixels.setPixelColor(6, pixels.Color(0, 150, 0));
-        break;
-
-      case '7':
-        Keyboard.println("defending");
-        pixels.setPixelColor(7, pixels.Color(0, 150, 0));
-        break;
-
-      case '8':
-        Keyboard.println("go for it");
-        pixels.setPixelColor(8, pixels.Color(0, 150, 0));
-        break;
-
-      case '9':
-        Keyboard.println("oh no!");
-        pixels.setPixelColor(9, pixels.Color(0, 150, 0));
-        break;
-
-      case '0':
-        Keyboard.println("no problem");
-        pixels.setPixelColor(10, pixels.Color(0, 150, 0));
-        break;
-
-      case 'A':
-        Keyboard.println("whoops");
-        pixels.setPixelColor(11, pixels.Color(0, 150, 0));
-        break;
-
-      case 'B':
-        Keyboard.println("#@!%*");
-        pixels.setPixelColor(12, pixels.Color(0, 150, 0));
-        break;
-      }
-      pixels.show(); //update the color after the button press
-      delay(100);
-      Keyboard.releaseAll(); // this releases the buttons
-      //delay(100);                                         //delay a bit to hold the color (optional)
-      colorUpdate = 0; //call the color update to change the color back to Mode settings
-    }
-    break;
-    //====================================================================================================================
-  case 2:             // Application Delta (some basic Arduino IDE Shortcuts and HotKeys)
-    encoderA_Mode1(); //  tab or shift+tab on the encoder rotation
-    encoderB_Mode1(); // + or - on the encoder rotation
-    LCD_update_2();   // Mode 2 text for LCD
-    setColorsMode2(); // set color layout for this mode
-    if (key)
-    {
-      //Serial.println(key);
-      switch (key)
-      {
-      case '1':
-        Keyboard.press(KEY_LEFT_CTRL);
-        Keyboard.print('s'); //Save
-        break;
-      case '2':
-        Keyboard.press(KEY_LEFT_CTRL);
-        Keyboard.print('r'); //Verify
-        break;
-      case '3':
-        Keyboard.press(KEY_LEFT_CTRL);
-        Keyboard.print('u'); //Upload
-        break;
-      case '4':
-        Keyboard.press(KEY_LEFT_CTRL);
-        Keyboard.press(KEY_LEFT_SHIFT);
-        Keyboard.print('m'); //Serial Monitor
-        break;
-      case '5':
-        Keyboard.press(KEY_LEFT_CTRL); //undo
-        Keyboard.print('z');
-        break;
-      case '6':
-        Keyboard.press(KEY_LEFT_CTRL); //redo
-        Keyboard.print('y');
-        break;
-      case '7':
-        Keyboard.press(KEY_LEFT_CTRL);
-        Keyboard.press(KEY_LEFT_SHIFT);
-        Keyboard.print('g'); //Find Previous
-        break;
-      case '8':
-        Keyboard.press(KEY_LEFT_CTRL);
-        Keyboard.print('g'); //Find Next
-        break;
-      case '9':
-        Keyboard.press(KEY_LEFT_CTRL);
-        Keyboard.print('c'); //Copy
-        break;
-      case '0':
-        Keyboard.press(KEY_LEFT_CTRL);
-        Keyboard.print('v'); //Paste
-        break;
-      case 'A':
-        Keyboard.press(KEY_LEFT_CTRL);
-        Keyboard.print('/'); //Comment / Uncomment
-        break;
-      case 'B':
-        Keyboard.press(KEY_LEFT_CTRL);
-        Keyboard.print('f'); // Find
-        break;
-      }
-      delay(100);
-      Keyboard.releaseAll(); // this releases the buttons
-    }
-    break;
-
-  case 3:           //Application 3 MS windows nonsense
-    LCD_update_3(); //Mode 3 text for LCD
-    setColorsMode3();
-    encoderA_Mode3(); //  Etch-a-sketch mouse up/down in MSpaint
-    encoderB_Mode3(); //  Etch-a-sketch mouse left/right in MSpaint
-    if (key)
-    {
-      //Serial.println(key);
-      switch (key)
-      {
-      case '1': //macro example!!! Windows_Key+R = Run then type "mspaint" and press enter. Opens MS Paint
-        Keyboard.press(KEY_LEFT_GUI);
-        Keyboard.press('r');
-        delay(150);
-        Keyboard.release(KEY_LEFT_GUI);
-        Keyboard.release('r');
-        delay(150); //give your system time to catch up with these android-speed keyboard presses
-        Keyboard.println("mspaint");
-        break;
-
-      case '2':
-        Keyboard.press(KEY_LEFT_GUI);
-        Keyboard.press(KEY_LEFT_ARROW);
-        delay(150); //snaps window to left side of screen.
-        break;
-      case '3':
-        Keyboard.press(KEY_LEFT_GUI);
-        Keyboard.press(KEY_RIGHT_ARROW);
-        delay(150); //snaps window to right side of screen.
-        break;
-      case '4':
-        Keyboard.press(KEY_LEFT_ALT);
-        Keyboard.press(KEY_F4);
-        delay(150); //Closes active window
-        break;
-
-      case '5': //macro example: Windows_Key+R = Run then type "calc" and press enter. Opens MS Calculator
-        Keyboard.press(KEY_LEFT_GUI);
-        Keyboard.press('r');
-        delay(150);
-        Keyboard.release(KEY_LEFT_GUI);
-        Keyboard.release('r');
-        delay(150); //give your system time to catch up with these android-speed keyboard presses
-        Keyboard.println("calc");
-        break;
-      case '6': //macro example: Windows_Key+R = Run then type "excel" and press enter. Opens MS Excel
-        Keyboard.press(KEY_LEFT_GUI);
-        Keyboard.press('r');
-        delay(150);
-        Keyboard.release(KEY_LEFT_GUI);
-        Keyboard.release('r');
-        delay(150); //give your system time to catch up with these android-speed keyboard presses
-        Keyboard.println("excel");
-        break;
-
-      case '7': //macro example: Windows_Key+R = Run then type "winword" and press enter. Opens MS Word
-        Keyboard.press(KEY_LEFT_GUI);
-        Keyboard.press('r');
-        delay(150);
-        Keyboard.release(KEY_LEFT_GUI);
-        Keyboard.release('r');
-        delay(150); //give your system time to catch up with these android-speed keyboard presses
-        Keyboard.println("winword");
-        break;
-      case '8': //macro that opens chrome and a random wiki page for learning.
-        Keyboard.press(KEY_LEFT_GUI);
-        Keyboard.press('r');
-        Keyboard.release(KEY_LEFT_GUI);
-        Keyboard.release('r');
-        delay(50); //give your system time to catch up with these android-speed keyboard presses
-        Keyboard.println("chrome");
-        delay(500);
-        Keyboard.println("https://en.wikipedia.org/wiki/Special:Random");
-        break;
-
-      case '9': //macro that opens Chrome & Rick Rolls you like a chump
-        Keyboard.press(KEY_LEFT_GUI);
-        Keyboard.press('r');
-        Keyboard.release(KEY_LEFT_GUI);
-        Keyboard.release('r');
-        delay(50); //give your system time to catch up with these android-speed keyboard presses
-        Keyboard.println("chrome");
-        delay(500);
-        Keyboard.println("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
-        break;
-      case '0': //macro that opens Chrome and goes to my youtube channel!
-        Keyboard.press(KEY_LEFT_GUI);
-        Keyboard.press('r');
-        Keyboard.release(KEY_LEFT_GUI);
-        Keyboard.release('r');
-        delay(50); //give your system time to catch up with these android-speed keyboard presses
-        Keyboard.println("chrome");
-        delay(500);
-        Keyboard.println("https://www.youtube.com/c/ryanbatesrbg");
-        break;
-      case 'A': //minimize all windows (view desktop)
-        Keyboard.press(KEY_LEFT_GUI);
-        Keyboard.press('m');
-        break;
-      case 'B':
-        Keyboard.press(KEY_LEFT_GUI); //Opens Snip-it
-        Keyboard.release(KEY_LEFT_GUI);
-        delay(25);
-        Keyboard.println("snip"); //type "snip" and press "return"
-        break;
-      }
-      delay(100);
-      Keyboard.releaseAll(); // this releases the buttons
-    }
-    break;
-  }
-  delay(1); // delay in between reads for stability
+  } while( u8g2.nextPage() );
+  y = (y + 1) % offset;
 }
