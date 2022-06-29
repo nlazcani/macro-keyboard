@@ -75,11 +75,11 @@ void setup()
   pinMode(LED_BUILTIN_TX, INPUT);
   pixels.begin();
 }
-char const *modes[3] = {"VScode", "Discord", "Windows"};
+char const *modes[3] = {"VScode", "Discord", "Clip Studio"};
 
 char const *modes0[12] = {"New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal"};
 char const *modes1[12] = {"New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal"};
-char const *modes2[12] = {"New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal", "New Terminal"};
+char const *modes2[12] = {"F13", "F14", "F15", "F16", "F17", "F18", "F19", "F20", "F21", "F22", "F23", "F24"};
 
 void loop()
 {
@@ -87,10 +87,10 @@ void loop()
   int number = (key < '9') ? key - '0' : key - '7';
   checkModeButton();
   setPixelMode();
-  updateDisplay(modes0,modePushCounter, number);
   switch (modePushCounter)
   {
   case 0:
+    updateDisplay(modes0,modePushCounter, number);
     if (key != NO_KEY)
     {
       switch (number)
@@ -158,6 +158,7 @@ void loop()
     Keyboard.releaseAll();
     break;
   case 1:
+    updateDisplay(modes1,modePushCounter, number);
     if (key != NO_KEY)
     {
       switch (number)
@@ -228,72 +229,46 @@ void loop()
     Keyboard.releaseAll();
     break;
   case 2:
+    updateDisplay(modes2,modePushCounter, number);
     if (key != NO_KEY)
     {
       switch (number)
       {
       case 0:
-        // Go to ending of line
-        Keyboard.press(KEY_END);
+        Keyboard.press(KEY_F13);
         break;
       case 1:
-        // Open Command Panel
-        Keyboard.press(CTRL);
-        Keyboard.press(SHIFT);
-        Keyboard.print('p');
+        Keyboard.press(KEY_F14);
         break;
       case 2:
-        // Open Terminal
-        Keyboard.press(CTRL);
-        Keyboard.print('`');
+        Keyboard.press(KEY_F15);
         break;
       case 3:
-        // Toggle Comment line
-        Keyboard.press(CTRL);
-        Keyboard.print('/');
+        Keyboard.press(KEY_F16);
         break;
       case 4:
-        // Toggle Comment Block
-        Keyboard.press(SHIFT);
-        Keyboard.press(ALT);
-        Keyboard.print('a');
+        Keyboard.press(KEY_F17);
         break;
       case 5:
-        // Split editor Vertical
-        Keyboard.press(CTRL);
-        Keyboard.print('\\');
+        Keyboard.press(KEY_F18);
         break;
       case 6:
-        // Split editor Orthogonal
-        Keyboard.press(CTRL);
-        Keyboard.print('k');
-        Keyboard.print('\\');
+        Keyboard.press(KEY_F19);
         break;
       case 7:
-        // Fold all regions
-        Keyboard.press(CTRL);
-        Keyboard.print('k');
-        Keyboard.print('0');
+        Keyboard.press(KEY_F20);
         break;
       case 8:
-        // Unfold all regions
-        Keyboard.press(CTRL);
-        Keyboard.print('k');
-        Keyboard.print('j');
+        Keyboard.press(KEY_F21);
         break;
       case 9:
-        // Go to beginning of line
-        Keyboard.press(KEY_HOME);
+        Keyboard.press(KEY_F22);
         break;
       case 10:
-        // Go to beginning of file
-        Keyboard.press(CTRL);
-        Keyboard.press(KEY_HOME);
+        Keyboard.press(KEY_F23);
         break;
       case 11:
-        // Go to ending of file
-        Keyboard.press(CTRL);
-        Keyboard.press(KEY_END);
+        Keyboard.press(KEY_F24);
         break;
       }
     }
